@@ -245,14 +245,6 @@ Daily Prompt — 13 February, 2026
 
 # 7️⃣ Important Notes
 
-## 🔒 Keep Repository Private
-
-The entire journal history is stored in the repo.
-
-If public, it is readable by anyone.
-
----
-
 ## API Costs
 
 Usage is extremely low.  
@@ -269,17 +261,6 @@ HISTORY_TAIL
 ```
 
 Recommended range: 80–150.
-
----
-
-# 8️⃣ Optional Enhancements
-
-- Add sequence numbering to subject
-- Add weekly philosophical themes
-- Maintain a “thread summary” file for stronger continuity
-- Add HTML styling improvements
-- Store history externally (S3, database)
-- Capture your journal responses for a closed-loop system
 
 ---
 
