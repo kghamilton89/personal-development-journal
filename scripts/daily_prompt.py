@@ -1,7 +1,8 @@
 import json
 import os
 from datetime import datetime, timezone
-from typing import List, Dict, Any
+from typing import Any, Dict, List
+from zoneinfo import ZoneInfo
 
 import requests
 from openai import OpenAI
@@ -20,7 +21,8 @@ def must_getenv(name: str) -> str:
 def load_history(path: str) -> List[Dict[str, Any]]:
     if not os.path.exists(path):
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
+        # Create an empty file.
+        with open(path, "w", encoding="utf-8"):
             pass
         return []
 
@@ -35,40 +37,100 @@ def load_history(path: str) -> List[Dict[str, Any]]:
 
 
 def tail_history(history: List[Dict[str, Any]], n: int) -> List[Dict[str, Any]]:
-    return history[-n:] if n > 0 else []
+    if n <= 0:
+        return []
+    return history[-n:]
 
 
 def build_instructions() -> str:
-    # This is the “system prompt” equivalent: stable constraints.
     return (
-        "You generate ONE daily journaling question.\n"
-        "Goals: self-actualization, personal development, philosophy, goal-setting, disciplined execution.\n"
-        "Output ONLY the question (no preface, no bullet points, no quotes).\n"
-        "Constraints:\n"
-        "- Must be a single sentence ending with '?'.\n"
-        "- Must be intellectually serious, specific, and actionable.\n"
-        "- Avoid therapy clichés, motivational poster language, and generic prompts.\n"
-        "- Avoid repeating themes, wording, or structure from prior questions.\n"
-        "- Maintain a logical progression over time: occasionally introduce a concept, then revisit it later with a deeper twist.\n"
-        "- Balance: identity/values, strategy, ethics, time allocation, tradeoffs, habits, fear/avoidance, and long-term vision.\n"
+        "You generate ONE daily journaling question.\n\n"
+        "The question must be written in FIVE languages in the following order:\n"
+        "1. Serbian (Latin script)\n"
+        "2. Turkish\n"
+        "3. French\n"
+        "4. Russian\n"
+        "5. English\n\n"
+        "Formatting rules:\n"
+        "- Each language must appear on its own line.\n"
+        "- No bullet points, no numbering, no labels.\n"
+        "- Output only the five questions, nothing else.\n"
+        "- Each line must be a single sentence ending with '?'.\n"
+        "- The content across languages must be semantically equivalent.\n\n"
+        "Content constraints:\n"
+        "- Themes: self-actualization, philosophy, disciplined execution, long-term goals.\n"
+        "- Must be intellectually serious and specific.\n"
+        "- Avoid therapy clichés and motivational fluff.\n"
+        "- Avoid repeating prior structure or wording.\n"
+        "- Maintain long-term conceptual progression across days.\n"
     )
 
 
 def build_context(history_tail: List[Dict[str, Any]]) -> str:
-    # Give the model the sequence (recent tail), so it can avoid repeats and build continuity.
-    # Keep it compact.
-    lines = []
+    """
+    Provide the model with a compact view of recent questions.
+    We store multi-language blocks; show only the English line when available
+    (5th line), otherwise show the raw question text.
+    """
+    lines: List[str] = []
+
     for item in history_tail:
         q = (item.get("question") or "").strip()
         d = (item.get("date_utc") or "").strip()
-        if q:
-            lines.append(f"- [{d}] {q}")
+        if not q:
+            continue
+
+        # If q is 5 lines, try to extract the English line (5th).
+        q_lines = [x.strip() for x in q.splitlines() if x.strip()]
+        if len(q_lines) >= 5:
+            q_show = q_lines[4]
+        else:
+            q_show = " ".join(q.split())
+
+        lines.append(f"- [{d}] {q_show}")
+
     joined = "\n".join(lines) if lines else "(no prior questions yet)"
     return (
         "Here are previous journal questions (most recent last). "
         "Do NOT repeat them; continue the sequence.\n"
         f"{joined}\n"
     )
+
+
+def normalize_output(text: str) -> str:
+    """
+    Normalize model output:
+    - trim
+    - remove empty lines
+    - ensure exactly 5 non-empty lines
+    - ensure each ends with '?'
+    - ensure no extra text
+    """
+    raw_lines = [ln.strip() for ln in (text or "").splitlines()]
+    raw_lines = [ln for ln in raw_lines if ln]
+
+    # If the model returned more than 5 lines, keep first 5 meaningful lines.
+    if len(raw_lines) > 5:
+        raw_lines = raw_lines[:5]
+
+    # If fewer than 5 lines, it's invalid.
+    if len(raw_lines) != 5:
+        raise RuntimeError(
+            f"Model output must contain exactly 5 non-empty lines; got {len(raw_lines)}.\nOutput:\n{text}"
+        )
+
+    fixed: List[str] = []
+    for ln in raw_lines:
+        # collapse internal whitespace
+        ln = " ".join(ln.split())
+        if not ln.endswith("?"):
+            ln = ln.rstrip(".") + "?"
+        # If multiple question marks, keep up to first '?'
+        if ln.count("?") > 1:
+            ln = ln.split("?")[0].strip() + "?"
+        fixed.append(ln)
+
+    return "\n".join(fixed)
 
 
 def generate_question(history_tail: List[Dict[str, Any]]) -> str:
@@ -90,18 +152,7 @@ def generate_question(history_tail: List[Dict[str, Any]]) -> str:
         input=user_input,
     )
 
-    q = (resp.output_text or "").strip()
-    q = " ".join(q.split())
-
-    if not q.endswith("?"):
-        q = q.rstrip(".") + "?"
-
-    # Guardrails: ensure it’s one line and not multiple questions.
-    if q.count("?") > 1:
-        # Keep only up to the first '?'
-        q = q.split("?")[0].strip() + "?"
-
-    return q
+    return normalize_output(resp.output_text)
 
 
 def append_history(path: str, date_utc: str, question: str) -> None:
@@ -139,6 +190,17 @@ def send_via_brevo(subject: str, text_body: str) -> None:
         raise RuntimeError(f"Brevo API error {r.status_code}: {r.text}")
 
 
+def human_date_moscow() -> str:
+    """
+    Render date as: "13 February, 2026" in Europe/Moscow timezone.
+    """
+    msk = ZoneInfo("Europe/Moscow")
+    now = datetime.now(msk)
+    # Day without leading zero on Linux: %-d; on Windows it's %#d.
+    # GitHub Actions runners are Linux, so %-d is safe here.
+    return now.strftime("%-d %B, %Y")
+
+
 def main() -> None:
     history_path = os.getenv("HISTORY_PATH", "data/journal_questions.jsonl")
     history_tail_n = int(os.getenv("HISTORY_TAIL", "120"))
@@ -146,17 +208,18 @@ def main() -> None:
     history = load_history(history_path)
     recent = tail_history(history, history_tail_n)
 
-    question = generate_question(recent)
+    question_block = generate_question(recent)
 
     now_utc = datetime.now(timezone.utc)
-    date_utc = now_utc.strftime("%Y-%m-%d")
     ts_utc = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    append_history(history_path, ts_utc, question)
+    append_history(history_path, ts_utc, question_block)
 
     subject_prefix = os.getenv("SUBJECT_PREFIX", "Daily Journal Question")
-    subject = f"{subject_prefix} — {date_utc}"
-    body = question + "\n"
+    date_human = human_date_moscow()
+    subject = f"{subject_prefix} — {date_human}"
+
+    # Email body is exactly the 5 lines.
+    body = question_block + "\n"
 
     send_via_brevo(subject=subject, text_body=body)
 
