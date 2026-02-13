@@ -1,7 +1,7 @@
 import json
 import os
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 from zoneinfo import ZoneInfo
 
 import requests
@@ -16,6 +16,16 @@ def must_getenv(name: str) -> str:
     if not v:
         raise RuntimeError(f"Missing required env var: {name}")
     return v
+
+
+def escape_html(s: str) -> str:
+    return (
+        s.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&#39;")
+    )
 
 
 def load_history(path: str) -> List[Dict[str, Any]]:
@@ -80,10 +90,9 @@ def build_context(history_tail: List[Dict[str, Any]]) -> str:
         if not q:
             continue
 
-        # If q is 5 lines, try to extract the English line (5th).
         q_lines = [x.strip() for x in q.splitlines() if x.strip()]
         if len(q_lines) >= 5:
-            q_show = q_lines[4]
+            q_show = q_lines[4]  # English line
         else:
             q_show = " ".join(q.split())
 
@@ -121,11 +130,9 @@ def normalize_output(text: str) -> str:
 
     fixed: List[str] = []
     for ln in raw_lines:
-        # collapse internal whitespace
         ln = " ".join(ln.split())
         if not ln.endswith("?"):
             ln = ln.rstrip(".") + "?"
-        # If multiple question marks, keep up to first '?'
         if ln.count("?") > 1:
             ln = ln.split("?")[0].strip() + "?"
         fixed.append(ln)
@@ -161,7 +168,58 @@ def append_history(path: str, date_utc: str, question: str) -> None:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
-def send_via_brevo(subject: str, text_body: str) -> None:
+def human_date_moscow() -> str:
+    """
+    Render date as: "13 February, 2026" in Europe/Moscow timezone.
+    """
+    msk = ZoneInfo("Europe/Moscow")
+    now = datetime.now(msk)
+    # GitHub Actions runners are Linux, so %-d is safe here (no leading zero).
+    return now.strftime("%-d %B, %Y")
+
+
+def format_email_content(question_block: str) -> Tuple[str, str]:
+    """
+    Takes the normalized 5-line question block and produces:
+      - text_content (plain text)
+      - html_content (bullet list with bold language names)
+    """
+    lines = [ln.strip() for ln in question_block.splitlines() if ln.strip()]
+    if len(lines) != 5:
+        raise RuntimeError(f"Expected 5 question lines, got {len(lines)}")
+
+    # Language names in their own language (as requested).
+    labels = ["Srpski", "Türkçe", "Français", "Русский", "English"]
+
+    date_line = human_date_moscow()
+
+    # Plain-text fallback
+    text = (
+        f"{date_line}\n"
+        f"- {labels[0]}: {lines[0]}\n"
+        f"- {labels[1]}: {lines[1]}\n"
+        f"- {labels[2]}: {lines[2]}\n"
+        f"- {labels[3]}: {lines[3]}\n"
+        f"- {labels[4]}: {lines[4]}\n"
+    )
+
+    html_items = "\n".join(
+        [f"<li><b>{labels[i]}</b>: {escape_html(lines[i])}</li>" for i in range(5)]
+    )
+
+    html = f"""
+<div style="font-family: Arial, Helvetica, sans-serif; line-height: 1.45;">
+  <div style="margin-bottom: 10px; font-weight: 600;">{escape_html(date_line)}</div>
+  <ul style="padding-left: 20px; margin-top: 0;">
+    {html_items}
+  </ul>
+</div>
+""".strip()
+
+    return text, html
+
+
+def send_via_brevo(subject: str, text_body: str, html_body: str) -> None:
     api_key = must_getenv("BREVO_API_KEY")
 
     payload = {
@@ -177,6 +235,7 @@ def send_via_brevo(subject: str, text_body: str) -> None:
         ],
         "subject": subject,
         "textContent": text_body,
+        "htmlContent": html_body,
     }
 
     headers = {
@@ -188,17 +247,6 @@ def send_via_brevo(subject: str, text_body: str) -> None:
     r = requests.post(BREVO_SEND_URL, headers=headers, json=payload, timeout=30)
     if r.status_code >= 300:
         raise RuntimeError(f"Brevo API error {r.status_code}: {r.text}")
-
-
-def human_date_moscow() -> str:
-    """
-    Render date as: "13 February, 2026" in Europe/Moscow timezone.
-    """
-    msk = ZoneInfo("Europe/Moscow")
-    now = datetime.now(msk)
-    # Day without leading zero on Linux: %-d; on Windows it's %#d.
-    # GitHub Actions runners are Linux, so %-d is safe here.
-    return now.strftime("%-d %B, %Y")
 
 
 def main() -> None:
@@ -218,10 +266,9 @@ def main() -> None:
     date_human = human_date_moscow()
     subject = f"{subject_prefix} — {date_human}"
 
-    # Email body is exactly the 5 lines.
-    body = question_block + "\n"
+    text_body, html_body = format_email_content(question_block)
 
-    send_via_brevo(subject=subject, text_body=body)
+    send_via_brevo(subject=subject, text_body=text_body, html_body=html_body)
 
 
 if __name__ == "__main__":
