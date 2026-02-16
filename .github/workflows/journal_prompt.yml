@@ -2,7 +2,7 @@ name: Daily journaling question
 
 on:
   schedule:
-    - cron: "0 2 * * *" # Runs at 0200 UTC
+    - cron: "0 0 * * *"  # Runs at 00:00 UTC
   workflow_dispatch: {}
 
 concurrency:
