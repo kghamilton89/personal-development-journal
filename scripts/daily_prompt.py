@@ -56,7 +56,7 @@ def build_instructions() -> str:
     return (
         "You generate ONE daily journaling question.\n\n"
         "The question must be written in FIVE languages in the following order:\n"
-        "1. Serbian (Latin script)\n"
+        "1. Serbian (Cyrillic script)\n"
         "2. Turkish\n"
         "3. French\n"
         "4. Russian\n"
@@ -189,7 +189,7 @@ def format_email_content(question_block: str) -> Tuple[str, str]:
         raise RuntimeError(f"Expected 5 question lines, got {len(lines)}")
 
     # Language names in their own language (as requested).
-    labels = ["Srpski", "Türkçe", "Français", "Русский", "English"]
+    labels = ["Српски", "Türkçe", "Français", "Русский", "English"]
 
     date_line = human_date_moscow()
 
