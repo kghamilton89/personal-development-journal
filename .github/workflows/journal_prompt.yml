@@ -2,7 +2,7 @@ name: Daily journaling question
 
 on:
   schedule:
-    - cron: "0 0 * * *"  # Runs at 00:00 UTC
+    - cron: "0 0 * * *" # Runs at 00:00 UTC
   workflow_dispatch: {}
 
 concurrency:
@@ -41,7 +41,9 @@ jobs:
 
           SUBJECT_PREFIX: ${{ secrets.SUBJECT_PREFIX }}
           HISTORY_PATH: data/journal_questions.jsonl
-          HISTORY_TAIL: "120"   # How many previous questions to send to the LLM
+          HISTORY_TAIL: "120" # How many previous questions to send to the LLM
+          FEEDBACK_BASE_URL: ${{ secrets.FEEDBACK_BASE_URL }}
+          FEEDBACK_TOKEN: ${{ secrets.FEEDBACK_TOKEN }}
         run: |
           python scripts/daily_prompt.py
 
@@ -54,5 +56,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add data/journal_questions.jsonl
+          git add data/journal_questions_lang_state.json
+          git add --force data/feedback.csv 2>/dev/null || true
           git commit -m "chore: add daily journal question"
           git push

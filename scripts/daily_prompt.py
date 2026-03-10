@@ -1,3 +1,4 @@
+import csv
 import json
 import os
 import random
@@ -137,9 +138,12 @@ def tail_history(history: List[Dict[str, Any]], n: int) -> List[Dict[str, Any]]:
     return history[-n:]
 
 
-def append_history(path: str, date_utc: str, question: str, language_code: str) -> None:
+def append_history(
+    path: str, date_utc: str, question: str, language_code: str, question_id: str
+) -> None:
     record = {
         "date_utc": date_utc,
+        "question_id": question_id,
         "question": question,
         "language": language_code,
     }
@@ -148,11 +152,81 @@ def append_history(path: str, date_utc: str, question: str, language_code: str) 
 
 
 # ---------------------------------------------------------------------------
+# Feedback helpers
+# ---------------------------------------------------------------------------
+
+
+def _feedback_path(history_path: str) -> str:
+    """Derive the feedback CSV path from the history file path."""
+    return os.path.join(os.path.dirname(history_path) or ".", "feedback.csv")
+
+
+def load_feedback(history_path: str) -> Dict[str, str]:
+    """
+    Load feedback.csv and return a dict mapping question_id -> rating ("up"|"down").
+    Returns an empty dict if the file does not exist yet.
+    """
+    path = _feedback_path(history_path)
+    if not os.path.exists(path):
+        return {}
+    result: Dict[str, str] = {}
+    with open(path, "r", encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            qid = (row.get("question_id") or "").strip()
+            rating = (row.get("rating") or "").strip().lower()
+            if qid and rating in {"up", "down"}:
+                result[qid] = rating
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Prompt helpers
 # ---------------------------------------------------------------------------
 
 
-def build_instructions(lang: Dict[str, str]) -> str:
+def build_instructions(
+    lang: Dict[str, str], feedback: Dict[str, str], history: List[Dict[str, Any]]
+) -> str:
+    """
+    Build the system instructions, including any feedback signal derived from
+    the user's thumbs-up / thumbs-down ratings on past questions.
+    """
+    # Build a lookup of question_id -> question text for rated items.
+    id_to_question: Dict[str, str] = {
+        item["question_id"]: item["question"]
+        for item in history
+        if item.get("question_id") and item.get("question")
+    }
+
+    liked: List[str] = []
+    disliked: List[str] = []
+    for qid, rating in feedback.items():
+        text = id_to_question.get(qid)
+        if not text:
+            continue
+        if rating == "up":
+            liked.append(text)
+        else:
+            disliked.append(text)
+
+    feedback_block = ""
+    if liked or disliked:
+        parts = ["\nUser feedback on past questions:\n"]
+        if liked:
+            parts.append(
+                "Questions the user rated GOOD (👍) — replicate tone, depth, specificity:\n"
+            )
+            for q in liked[-10:]:
+                parts.append(f"  + {q}\n")
+        if disliked:
+            parts.append(
+                "Questions the user rated BAD (👎) — avoid this style, framing, or theme:\n"
+            )
+            for q in disliked[-10:]:
+                parts.append(f"  - {q}\n")
+        feedback_block = "".join(parts)
+
     return (
         f"You generate ONE daily journaling question written in {lang['instruction']} only.\n\n"
         "Formatting rules:\n"
@@ -182,6 +256,7 @@ def build_instructions(lang: Dict[str, str]) -> str:
         "- Avoid repeating prior structure, framing, or wording.\n"
         "- Maintain long-term conceptual progression across days; treat the sequence as a\n"
         "  slow, cumulative intellectual journey rather than isolated daily prompts.\n"
+        + feedback_block
     )
 
 
@@ -238,10 +313,15 @@ def normalize_output(text: str) -> str:
     return ln
 
 
-def generate_question(history_tail: List[Dict[str, Any]], lang: Dict[str, str]) -> str:
+def generate_question(
+    history_tail: List[Dict[str, Any]],
+    lang: Dict[str, str],
+    feedback: Dict[str, str],
+    full_history: List[Dict[str, Any]],
+) -> str:
     client = OpenAI(api_key=must_getenv("OPENAI_API_KEY"))
 
-    instructions = build_instructions(lang)
+    instructions = build_instructions(lang, feedback, full_history)
     context = build_context(history_tail)
 
     today_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -274,24 +354,62 @@ def human_date_moscow() -> str:
     return now.strftime("%-d %B, %Y")
 
 
-def format_email_content(question: str, lang: Dict[str, str]) -> Tuple[str, str]:
+def _feedback_url(base_url: str, token: str, question_id: str, rating: str) -> str:
+    """Build a feedback URL with all required parameters."""
+    from urllib.parse import urlencode
+
+    params = urlencode({"id": question_id, "rating": rating, "token": token})
+    return f"{base_url.rstrip('/')}/feedback?{params}"
+
+
+def format_email_content(
+    question: str,
+    lang: Dict[str, str],
+    question_id: str,
+    feedback_base_url: str,
+    feedback_token: str,
+) -> Tuple[str, str]:
     """
-    Takes the normalized single-line question and the chosen language and
-    produces:
+    Takes the normalized single-line question, the chosen language, and feedback
+    link parameters, and produces:
       - text_content (plain text)
-      - html_content
+      - html_content (with thumbs-up / thumbs-down icon links)
     """
     date_line = human_date_moscow()
 
-    text = f"{date_line}\n" f"- {lang['label']}: {question}\n"
+    url_up = _feedback_url(feedback_base_url, feedback_token, question_id, "up")
+    url_down = _feedback_url(feedback_base_url, feedback_token, question_id, "down")
 
-    html = f"""
-<div style="font-family: Arial, Helvetica, sans-serif; line-height: 1.45;">
-  <div style="margin-bottom: 10px; font-weight: 600;">{escape_html(date_line)}</div>
-  <ul style="padding-left: 20px; margin-top: 0;">
-    <li><b>{escape_html(lang['label'])}</b>: {escape_html(question)}</li>
-  </ul>
-</div>""".strip()
+    # Plain-text fallback (no icons possible).
+    text = (
+        f"{date_line}\n"
+        f"- {lang['label']}: {question}\n"
+        f"\nWas this question useful?\n"
+        f"  👍 Yes: {url_up}\n"
+        f"  👎 No:  {url_down}\n"
+    )
+
+    html = f"""<div style="font-family: Arial, Helvetica, sans-serif; line-height: 1.5; color: #1a1a2e; max-width: 640px;">
+  <div style="margin-bottom: 14px; font-size: 0.85rem; color: #6b6b8a; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase;">{escape_html(date_line)}</div>
+  <div style="font-size: 1.15rem; font-weight: 500; margin-bottom: 28px;">
+    <span style="color: #6b6b8a; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em;">{escape_html(lang['label'])}&nbsp;&nbsp;</span>{escape_html(question)}
+  </div>
+  <div style="border-top: 1px solid #e4e4f0; padding-top: 18px; display: flex; gap: 12px; align-items: center;">
+    <span style="font-size: 0.78rem; color: #9999b3; margin-right: 6px;">Was this useful?</span>
+    <a href="{url_up}"
+       style="display: inline-flex; align-items: center; justify-content: center;
+              width: 40px; height: 40px; border-radius: 50%;
+              background: #f0fdf4; border: 1px solid #bbf7d0;
+              font-size: 1.25rem; text-decoration: none; line-height: 1;"
+       title="Good question">&#128077;</a>
+    <a href="{url_down}"
+       style="display: inline-flex; align-items: center; justify-content: center;
+              width: 40px; height: 40px; border-radius: 50%;
+              background: #fff1f2; border: 1px solid #fecdd3;
+              font-size: 1.25rem; text-decoration: none; line-height: 1;"
+       title="Not useful">&#128078;</a>
+  </div>
+</div>"""
 
     return text, html
 
@@ -339,29 +457,40 @@ def send_via_brevo(subject: str, text_body: str, html_body: str) -> None:
 def main() -> None:
     history_path = os.getenv("HISTORY_PATH", "data/journal_questions.jsonl")
     history_tail_n = int(os.getenv("HISTORY_TAIL", "120"))
+    feedback_base_url = os.getenv("FEEDBACK_BASE_URL", "")
+    feedback_token = os.getenv("FEEDBACK_TOKEN", "")
 
     # 1. Determine today's language from the cycle.
     lang, remaining_queue = pick_language(history_path)
 
-    # 2. Load history for context.
+    # 2. Load full history (needed for feedback look-up) + tail for context.
     history = load_history(history_path)
     recent = tail_history(history, history_tail_n)
 
-    # 3. Generate question in the chosen language.
-    question = generate_question(recent, lang)
+    # 3. Load user feedback on past questions.
+    feedback = load_feedback(history_path)
 
-    # 4. Persist: history record + updated language queue.
+    # 4. Generate question in the chosen language, informed by feedback.
+    question = generate_question(recent, lang, feedback, history)
+
+    # 5. Assign a stable ID for this question (used by the feedback links).
     now_utc = datetime.now(timezone.utc)
     ts_utc = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
-    append_history(history_path, ts_utc, question, lang["code"])
+    # Use a URL-safe slug: replace colons with hyphens.
+    question_id = ts_utc.replace(":", "-")
+
+    # 6. Persist: history record + updated language queue.
+    append_history(history_path, ts_utc, question, lang["code"], question_id)
     save_language_state(history_path, remaining_queue)
 
-    # 5. Send email.
+    # 7. Send email.
     subject_prefix = os.getenv("SUBJECT_PREFIX", "Daily Journal Question")
     date_human = human_date_moscow()
     subject = f"{subject_prefix} — {date_human}"
 
-    text_body, html_body = format_email_content(question, lang)
+    text_body, html_body = format_email_content(
+        question, lang, question_id, feedback_base_url, feedback_token
+    )
     send_via_brevo(subject=subject, text_body=text_body, html_body=html_body)
 
 
