@@ -31,8 +31,58 @@ app = Flask(__name__)
 
 GITHUB_API = "https://api.github.com"
 VALID_RATINGS = {"up", "down"}
+VALID_LANGS = {"serbian", "turkish", "french", "russian"}
 # Allowlist for question IDs: ISO-8601 timestamp slugs, e.g. 2026-03-10T00-19-39Z
 _ID_RE = re.compile(r"^[\w\-:\.]+$")
+
+# Thank-you page copy keyed by language code and rating.
+# Each entry: (html_lang, title, body)
+RESPONSES: dict[str, dict[str, tuple[str, str, str]]] = {
+    "serbian": {
+        "up": (
+            "sr",
+            "Хвала на позитивној оцени!",
+            "Добро је знати — следи још оваквих.",
+        ),
+        "down": (
+            "sr",
+            "Забележено.",
+            "Повратна информација примљена — следеће питање ће бити боље.",
+        ),
+    },
+    "turkish": {
+        "up": (
+            "tr",
+            "Beğeni için teşekkürler!",
+            "Güzel — bunun gibi daha fazlası yolda.",
+        ),
+        "down": (
+            "tr",
+            "Not alındı.",
+            "Geri bildirim kaydedildi — bir sonraki soru daha iyi olacak.",
+        ),
+    },
+    "french": {
+        "up": (
+            "fr",
+            "Merci pour le pouce levé !",
+            "Bonne nouvelle — d'autres questions dans ce style arrivent.",
+        ),
+        "down": (
+            "fr",
+            "Noté.",
+            "Retour enregistré — la prochaine question visera plus haut.",
+        ),
+    },
+    "russian": {
+        "up": (
+            "ru",
+            "Спасибо за положительную оценку!",
+            "Приятно знать — скоро будет больше подобного.",
+        ),
+        "down": ("ru", "Принято.", "Отзыв записан — следующий вопрос будет лучше."),
+    },
+}
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +188,7 @@ def _append_feedback(question_id: str, rating: str, rated_at: str) -> None:
 # ---------------------------------------------------------------------------
 
 _PAGE = """<!doctype html>
-<html lang="en">
+<html lang="{lang}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -168,8 +218,10 @@ _PAGE = """<!doctype html>
 </html>"""
 
 
-def _html_response(title: str, icon: str, body: str, status: int = 200) -> Response:
-    html = _PAGE.format(title=title, icon=icon, body=body)
+def _html_response(
+    title: str, icon: str, body: str, status: int = 200, lang: str = "en"
+) -> Response:
+    html = _PAGE.format(title=title, icon=icon, body=body, lang=lang)
     return Response(html, status=status, mimetype="text/html")
 
 
@@ -188,6 +240,11 @@ def feedback():
     # --- Validate inputs ---
     question_id = request.args.get("id", "").strip()
     rating = request.args.get("rating", "").strip().lower()
+    lang_code = request.args.get("lang", "").strip().lower()
+
+    # Fall back to a known language if the param is missing or unrecognised.
+    if lang_code not in VALID_LANGS:
+        lang_code = "french"
 
     if not question_id or not _ID_RE.match(question_id):
         return _html_response(
@@ -210,19 +267,10 @@ def feedback():
             500,
         )
 
-    # --- Success ---
-    if rating == "up":
-        return _html_response(
-            "Thanks for the thumbs up!",
-            "👍",
-            "Good to know — more like this is on the way.",
-        )
-    else:
-        return _html_response(
-            "Noted.",
-            "👎",
-            "Feedback recorded — the next question will aim higher.",
-        )
+    # --- Success — render in the question's language ---
+    html_lang, title, body = RESPONSES[lang_code][rating]
+    icon = "👍" if rating == "up" else "👎"
+    return _html_response(title, icon, body, lang=html_lang)
 
 
 @app.get("/health")

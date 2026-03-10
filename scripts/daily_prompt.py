@@ -213,16 +213,23 @@ def build_instructions(
 
     feedback_block = ""
     if liked or disliked:
-        parts = ["\nUser feedback on past questions:\n"]
+        parts = [
+            "\nUser feedback signal (treat as calibration, not rules):\n"
+            "Use this to understand what resonates — do not copy liked questions or\n"
+            "mechanically avoid disliked themes. Variety and progression still take\n"
+            "priority; feedback should nudge direction, not constrain it.\n"
+        ]
         if liked:
             parts.append(
-                "Questions the user rated GOOD (👍) — replicate tone, depth, specificity:\n"
+                "Questions the user rated GOOD (👍) — note the depth, specificity,\n"
+                "and style of questioning; aim for that register, not these exact topics:\n"
             )
             for q in liked[-10:]:
                 parts.append(f"  + {q}\n")
         if disliked:
             parts.append(
-                "Questions the user rated BAD (👎) — avoid this style, framing, or theme:\n"
+                "Questions the user rated BAD (👎) — the specific framing or angle\n"
+                "below did not land; treat each as one data point, not a topic ban:\n"
             )
             for q in disliked[-10:]:
                 parts.append(f"  - {q}\n")
@@ -355,11 +362,15 @@ def human_date_moscow() -> str:
     return now.strftime("%-d %B, %Y")
 
 
-def _feedback_url(base_url: str, token: str, question_id: str, rating: str) -> str:
+def _feedback_url(
+    base_url: str, token: str, question_id: str, rating: str, lang_code: str
+) -> str:
     """Build a feedback URL with all required parameters."""
     from urllib.parse import urlencode
 
-    params = urlencode({"id": question_id, "rating": rating, "token": token})
+    params = urlencode(
+        {"id": question_id, "rating": rating, "token": token, "lang": lang_code}
+    )
     return f"{base_url.rstrip('/')}/feedback?{params}"
 
 
@@ -378,8 +389,12 @@ def format_email_content(
     """
     date_line = human_date_moscow()
 
-    url_up = _feedback_url(feedback_base_url, feedback_token, question_id, "up")
-    url_down = _feedback_url(feedback_base_url, feedback_token, question_id, "down")
+    url_up = _feedback_url(
+        feedback_base_url, feedback_token, question_id, "up", lang["code"]
+    )
+    url_down = _feedback_url(
+        feedback_base_url, feedback_token, question_id, "down", lang["code"]
+    )
 
     # Plain-text fallback (no icons possible).
     text = (
