@@ -17,6 +17,26 @@ The system:
 
 ---
 
+## Contents
+
+- [How It Works](#how-it-works)
+- [Languages and Cycle](#languages-and-cycle)
+- [Repository Structure](#repository-structure)
+- [Required Accounts](#required-accounts)
+- [Setup](#setup)
+  - [Step 1 — OpenAI API Key](#step-1--openai-api-key)
+  - [Step 2 — Brevo Transactional Email](#step-2--brevo-transactional-email)
+  - [Step 3 — Railway Feedback Server](#step-3--railway-feedback-server)
+  - [Step 4 — Test the Workflow](#step-4--test-the-workflow)
+- [All GitHub Actions Secrets](#all-github-actions-secrets)
+- [Customising Languages](#customising-languages)
+- [Customising Prompt Behaviour](#customising-prompt-behaviour)
+- [Changing the LLM](#changing-the-llm)
+- [Theme Categories](#theme-categories)
+- [API Cost Estimate](#api-cost-estimate)
+
+---
+
 ## How It Works
 
 1. GitHub Actions runs daily at **05:00 MSK (02:00 UTC)**
@@ -32,10 +52,10 @@ The system:
 
 ## Languages and Cycle
 
-Each day one language is chosen at random. Once all 4 have been used, the cycle resets with a new random order.
+Each day one language is chosen at random. Once all 4 have been used, the cycle resets with a new random order. To add, remove, or swap a language see [Customising Languages](#customising-languages).
 
-| Language | Script          |
-| -------- | --------------- |
+| Language | Script           |
+| -------- | ---------------- |
 | Српски   | Serbian Cyrillic |
 | Türkçe   | Turkish          |
 | Français | French           |
