@@ -18,7 +18,6 @@ LANGUAGES = [
     {"code": "turkish", "instruction": "Turkish", "label": "Türkçe"},
     {"code": "french", "instruction": "French", "label": "Français"},
     {"code": "russian", "instruction": "Russian", "label": "Русский"},
-    {"code": "english", "instruction": "English", "label": "English"},
 ]
 
 LANGUAGE_CODES = [lang["code"] for lang in LANGUAGES]
@@ -106,7 +105,9 @@ def pick_language(history_path: str) -> Tuple[Dict[str, str], List[str]]:
     if not queue:
         queue = _new_shuffled_queue()
 
-    lang = next(l for l in LANGUAGES if l["code"] == chosen_code)
+    lang = next(
+        lang_entry for lang_entry in LANGUAGES if lang_entry["code"] == chosen_code
+    )
     return lang, queue
 
 
